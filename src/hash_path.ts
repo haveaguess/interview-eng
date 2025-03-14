@@ -11,11 +11,8 @@ export class HashPath {
   static fromBuffer(buf: Buffer) {
     return new HashPath(
       [...new Array(buf.length / 64)].map((_, i) => [
-        // Using subarray instead of slice as slice is deprecated in newer Node.js versions (efficient gain also)
-        // buf.slice(i * 2 * 32, i * 2 * 32 + 32),
-        buf.subarray(i * 2 * 32, i * 2 * 32 + 32),
-        // buf.slice(i * 2 * 32 + 32, i * 2 * 32 + 64),
-        buf.subarray(i * 2 * 32 + 32, i * 2 * 32 + 64),
+        buf.slice(i * 2 * 32, i * 2 * 32 + 32),
+        buf.slice(i * 2 * 32 + 32, i * 2 * 32 + 64),
       ]),
     );
   }
