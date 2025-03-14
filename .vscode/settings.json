@@ -1,0 +1,12 @@
+{
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "typescript.preferences.importModuleSpecifier": "non-relative",
+  "typescript.suggest.enabled": true,
+  "typescript.validate.enable": true,
+  "javascript.validate.enable": true,
+  "node-version": "18",
+  "files.associations": {
+    "*.ts": "typescript"
+  }
+} 
