@@ -47,34 +47,27 @@ export class MerkleTree {
       throw Error('Bad depth');
     }
 
+    // Precompute empty tree hashes first for better performance
+    this.precomputeEmptyTreeHashes();
+
     if (root) {
       // If restoring existing tree, use provided root
       this.root = root;
     } else {
-      // For new tree, calculate root hash of empty tree (all zero leaves)
+      // For new tree, get the root hash of empty tree from cached values
       this.root = this.calculateEmptyTreeRoot();
     }
-
-    // Precompute empty tree hashes for better performance
-    this.precomputeEmptyTreeHashes();
   }
 
   /**
-   * Efficiently calculates the root hash of an empty tree with all zero leaves.
-   * Takes advantage of the fact that all nodes at the same level have identical hashes.
+   * Efficiently retrieves the root hash of an empty tree with all zero leaves.
+   * Uses the precomputed values to avoid duplicate calculations.
    */
   private calculateEmptyTreeRoot(): Buffer {
-    // Start with the hash of an empty leaf
-    const emptyLeaf = Buffer.alloc(LEAF_BYTES);
-    let currentHash = this.hasher.hash(emptyLeaf);
-    
-    // At each level, the parent hash is created by compressing
-    // two identical child hashes (since all nodes at same level are identical)
-    for (let i = 0; i < this.depth; i++) {
-      currentHash = this.hasher.compress(currentHash, currentHash);
-    }
-    
-    return currentHash;
+    // Simply return the cached root hash for the tree's depth
+    // Non-null assertion (!) is safe here because precomputeEmptyTreeHashes()
+    // is always called in the constructor before this method
+    return this.nodeCache.get(`zero:${this.depth}`)!;
   }
 
   /**
@@ -186,43 +179,31 @@ export class MerkleTree {
     }
 
     let hash: Buffer;
+    // Unified naming convention - all nodes use node:level:index format
+    const nodeKey = `node:${level}:${index}`;
     
-    if (level === 0) {
-      // For leaves, try to get stored value or return empty leaf hash
-      const leafKey = `leaf:${index}`;
-      try {
-        hash = await this.db.get(Buffer.from(leafKey));
-      } catch (e) {
-        // If leaf not found, it's considered to be all zeros
+    try {
+      // Attempt to retrieve the node from database
+      hash = await this.db.get(Buffer.from(nodeKey));
+    } catch (e) {
+      // If node not found in database, calculate it
+      if (level === 0) {
+        // Level 0 nodes (leaves) use empty LEAF_BYTES when not set
         hash = this.hasher.hash(Buffer.alloc(LEAF_BYTES));
-      }
-    } else {
-      // For internal nodes, try to get stored hash or calculate from children
-      const nodeKey = `node:${level}:${index}`;
-      try {
-        hash = await this.db.get(Buffer.from(nodeKey));
-      } catch (e) {
-        // If not in database, calculate from child hashes
-        // For empty/default nodes, use our efficient zero hash calculation
-        const isDefaultTree = index < 0 || index >= levelSize;
-        if (isDefaultTree) {
-          // Use our efficient zero hash calculation for default nodes
-          hash = this.calculateZeroHashAtLevel(level);
-        } else {
-          // Calculate parent hash by getting and combining child hashes
-          const childLevelSize = levelSize * 2;
-          const leftChildIndex = index * 2;
-          const rightChildIndex = leftChildIndex + 1;
-          
-          const leftHash = await this.getNodeHash(level - 1, leftChildIndex, childLevelSize);
-          const rightHash = await this.getNodeHash(level - 1, rightChildIndex, childLevelSize);
-          
-          hash = this.hasher.compress(leftHash, rightHash);
-        }
+      } else {
+        // Calculate parent hash by getting and combining child hashes
+        const childLevelSize = levelSize * 2;
+        const leftChildIndex = index * 2;
+        const rightChildIndex = leftChildIndex + 1;
+        
+        const leftHash = await this.getNodeHash(level - 1, leftChildIndex, childLevelSize);
+        const rightHash = await this.getNodeHash(level - 1, rightChildIndex, childLevelSize);
+        
+        hash = this.hasher.compress(leftHash, rightHash);
       }
     }
     
-    // Cache the result
+    // Cache the result for future use
     this.nodeCache.set(cacheKey, hash);
     return hash;
   }
@@ -230,16 +211,8 @@ export class MerkleTree {
   /**
    * Updates a leaf value and recalculates all affected hashes up to the root.
    * Uses batch operations to ensure atomic updates to the database.
-   * 
-   * Example: Updating index 2 in a depth-3 tree updates these nodes:
-   *                     [Root*]              // New root
-   *           [H1,2]            [H3,4*]     // New H3,4
-   *      [H1]    [H2]      [H3*]    [H4]   // New H3
    */
   async updateElement(index: number, value: Buffer) {
-    // Remove the debug log
-    // console.log(`updateElement called with index ${index}, depth ${this.depth}, max valid index: ${(1 << this.depth) - 1}`);
-    
     // Fix bounds check - for a tree of depth N, valid indices are 0 to 2^N - 1
     if (index < 0 || index >= Math.pow(2, this.depth)) {
       throw new Error(`Index ${index} out of range for tree of depth ${this.depth}`);
@@ -248,14 +221,17 @@ export class MerkleTree {
     // Clear cache before update
     this.nodeCache.clear();
     
+    // Ensure zero hashes are pre-calculated for better performance
+    this.precomputeEmptyTreeHashes();
+    
     // Start a batch of database operations
     const batch = this.db.batch();
     
     // Calculate all necessary hashes in memory first
     const leafHash = this.hasher.hash(value);
     
-    // Store leaf hash in database
-    const leafKey = `leaf:${index}`;
+    // Store leaf hash in database using unified naming convention
+    const leafKey = `node:0:${index}`; // Level 0 = leaf nodes
     batch.put(Buffer.from(leafKey), leafHash);
     
     // Pre-calculate all the hashes up the tree
@@ -268,30 +244,26 @@ export class MerkleTree {
       const isRight = currentIndex % 2 !== 0;
       const siblingIndex = isRight ? currentIndex - 1 : currentIndex + 1;
       
-      // Get sibling hash with caching
-      const siblingKey = `${level}:${siblingIndex}`;
+      // Get sibling hash with optimized approach
       let siblingHash: Buffer;
+      const siblingKey = `${level}:${siblingIndex}`;
       
       if (this.nodeCache.has(siblingKey)) {
         siblingHash = this.nodeCache.get(siblingKey)!;
       } else {
-        // Try getting from database first (only one DB call)
+        // Try getting from database directly
+        const siblingNodeKey = `node:${level}:${siblingIndex}`;
         try {
-          if (level === 0) {
-            siblingHash = await this.db.get(Buffer.from(`leaf:${siblingIndex}`));
-          } else {
-            siblingHash = await this.db.get(Buffer.from(`node:${level}:${siblingIndex}`));
-          }
+          siblingHash = await this.db.get(Buffer.from(siblingNodeKey));
         } catch (e) {
           // If not in database, use empty hash value
           if (level === 0) {
             siblingHash = this.hasher.hash(Buffer.alloc(LEAF_BYTES));
           } else {
-            // For internal nodes with no data, use hash of two child zero hashes
-            const zeroHash = this.calculateZeroHashAtLevel(level - 1);
-            siblingHash = this.hasher.compress(zeroHash, zeroHash);
+            siblingHash = this.calculateZeroHashAtLevel(level);
           }
         }
+        // Cache for future use
         this.nodeCache.set(siblingKey, siblingHash);
       }
       
@@ -308,7 +280,7 @@ export class MerkleTree {
       levelSize /= 2;
     }
     
-    // Now save all the internal nodes to database (not just the path to root)
+    // Now save all the internal nodes to database using unified naming
     currentIndex = index;
     for (let level = 0; level < this.depth - 1; level++) {
       currentIndex = Math.floor(currentIndex / 2);
