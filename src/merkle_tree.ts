@@ -295,28 +295,8 @@ export class MerkleTree {
     return this.root;
   }
   
-  /**
-   * Calculate the hash of an empty/zero subtree at a given level.
-   * This is much faster than recursively calculating empty hashes.
-   */
   private calculateZeroHashAtLevel(level: number): Buffer {
-    const cacheKey = `zero:${level}`;
-    if (this.nodeCache.has(cacheKey)) {
-      return this.nodeCache.get(cacheKey)!;
-    }
-    
-    let hash: Buffer;
-    if (level === 0) {
-      // Base case: hash of empty leaf
-      hash = this.hasher.hash(Buffer.alloc(LEAF_BYTES));
-    } else {
-      // Recursive case: hash of two identical child hashes
-      const childHash = this.calculateZeroHashAtLevel(level - 1);
-      hash = this.hasher.compress(childHash, childHash);
-    }
-    
-    this.nodeCache.set(cacheKey, hash);
-    return hash;
+    return this.nodeCache.get(`zero:${level}`)!;
   }
 
   /**
