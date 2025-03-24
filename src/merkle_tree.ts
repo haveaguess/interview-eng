@@ -139,7 +139,6 @@ export class MerkleTree {
     }
 
     const path = [];
-    let levelSize = Math.pow(2, this.depth);
     let levelIndex = index;
     
     // Build path from leaf to root
@@ -150,8 +149,8 @@ export class MerkleTree {
       
       // Get both the current node's hash and its sibling's hash in parallel for efficiency
       const [currentHash, siblingHash] = await Promise.all([
-        this.getNodeHash(level, levelIndex, levelSize),
-        this.getNodeHash(level, siblingIndex, levelSize)
+        this.getNodeHash(level, levelIndex),
+        this.getNodeHash(level, siblingIndex)
       ]);
       
       // Store hashes in correct order (left then right)
@@ -159,7 +158,6 @@ export class MerkleTree {
       path.push(pair);
       
       // Move up to parent level
-      levelSize /= 2;
       levelIndex = Math.floor(levelIndex / 2);
     }
     
@@ -171,7 +169,7 @@ export class MerkleTree {
    * - For leaves (level 0): returns stored hash or hash of zeros if not set
    * - For internal nodes: returns stored hash or calculates from children
    */
-  private async getNodeHash(level: number, index: number, levelSize: number): Promise<Buffer> {
+  private async getNodeHash(level: number, index: number): Promise<Buffer> {
     // Use cache if available
     const cacheKey = `${level}:${index}`;
     if (this.nodeCache.has(cacheKey)) {
@@ -192,12 +190,11 @@ export class MerkleTree {
         hash = this.hasher.hash(Buffer.alloc(LEAF_BYTES));
       } else {
         // Calculate parent hash by getting and combining child hashes
-        const childLevelSize = levelSize * 2;
         const leftChildIndex = index * 2;
         const rightChildIndex = leftChildIndex + 1;
         
-        const leftHash = await this.getNodeHash(level - 1, leftChildIndex, childLevelSize);
-        const rightHash = await this.getNodeHash(level - 1, rightChildIndex, childLevelSize);
+        const leftHash = await this.getNodeHash(level - 1, leftChildIndex);
+        const rightHash = await this.getNodeHash(level - 1, rightChildIndex);
         
         hash = this.hasher.compress(leftHash, rightHash);
       }
@@ -238,7 +235,6 @@ export class MerkleTree {
     const nodes: Buffer[] = new Array(this.depth);
     let currentHash = leafHash;
     let currentIndex = index;
-    let levelSize = Math.pow(2, this.depth);
     
     for (let level = 0; level < this.depth; level++) {
       const isRight = currentIndex % 2 !== 0;
@@ -277,7 +273,6 @@ export class MerkleTree {
       
       // Move up to parent level
       currentIndex = Math.floor(currentIndex / 2);
-      levelSize /= 2;
     }
     
     // Now save all the internal nodes to database using unified naming
