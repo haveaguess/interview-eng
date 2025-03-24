@@ -1,3 +1,9 @@
+# Ben's workings
+
+Here's a document outlining the changes made when working through the problem  
+
+https://docs.google.com/document/d/15xh1XgHNtYuIph8moOr_bRlC186YpBocgausbalh_ro/edit?tab=t.0#heading=h.i8ccpa57yvuj
+
 # Technical Challenge
 
 The test (borrowed from Aztec, a kickass protocol and team) provides you an opportunity to demonstrate the following:
